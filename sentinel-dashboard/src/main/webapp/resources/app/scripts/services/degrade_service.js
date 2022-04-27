@@ -33,6 +33,7 @@ app.service('DegradeService', ['$http', function ($http) {
         statIntervalMs: rule.statIntervalMs,
         minRequestAmount: rule.minRequestAmount,
         slowRatioThreshold: rule.slowRatioThreshold,
+        app: rule.app,
     };
     return $http({
         url: '/degrade/rule/' + rule.id,
@@ -44,6 +45,7 @@ app.service('DegradeService', ['$http', function ($http) {
   this.deleteRule = function (rule) {
       return $http({
           url: '/degrade/rule/' + rule.id,
+          params: {app: rule.app},
           method: 'DELETE'
       });
   };

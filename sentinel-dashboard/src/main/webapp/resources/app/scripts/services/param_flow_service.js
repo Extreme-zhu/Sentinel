@@ -1,6 +1,6 @@
 /**
  * Parameter flow control service.
- * 
+ *
  * @author Eric Zhao
  */
 angular.module('sentinelDashboardApp').service('ParamFlowService', ['$http', function ($http) {
@@ -36,7 +36,11 @@ angular.module('sentinelDashboardApp').service('ParamFlowService', ['$http', fun
   this.deleteRule = function (entity) {
     return $http({
       url: '/paramFlow/rule/' + entity.id,
-      method: 'DELETE'
+        data: entity,
+        headers: {
+            'Content-type': 'application/json'
+        },
+        method: 'DELETE'
     });
   };
 

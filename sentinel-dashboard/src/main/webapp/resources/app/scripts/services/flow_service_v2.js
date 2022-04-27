@@ -31,8 +31,13 @@ app.service('FlowServiceV2', ['$http', function ($http) {
     };
 
     this.deleteRule = function (rule) {
+        debugger
         return $http({
             url: '/v2/flow/rule/' + rule.id,
+            data: rule,
+            headers: {
+                'Content-type': 'application/json'
+            },
             method: 'DELETE'
         });
     };

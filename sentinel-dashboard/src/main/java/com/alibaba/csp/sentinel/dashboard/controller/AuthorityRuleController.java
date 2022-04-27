@@ -18,20 +18,25 @@ package com.alibaba.csp.sentinel.dashboard.controller;
 import com.alibaba.csp.sentinel.dashboard.auth.AuthAction;
 import com.alibaba.csp.sentinel.dashboard.auth.AuthService.PrivilegeType;
 import com.alibaba.csp.sentinel.dashboard.datasource.entity.rule.AuthorityRuleEntity;
+import com.alibaba.csp.sentinel.dashboard.datasource.entity.rule.FlowRuleEntity;
 import com.alibaba.csp.sentinel.dashboard.domain.Result;
-import com.alibaba.csp.sentinel.dashboard.repository.rule.RuleRepository;
 import com.alibaba.csp.sentinel.dashboard.rule.DynamicRuleProvider;
 import com.alibaba.csp.sentinel.dashboard.rule.DynamicRulePublisher;
 import com.alibaba.csp.sentinel.slots.block.RuleConstant;
 import com.alibaba.csp.sentinel.util.StringUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.Comparator;
 import java.util.Date;
 import java.util.List;
+import java.util.stream.IntStream;
+
+import static java.util.stream.Collectors.toList;
 
 /**
  * @author Eric Zhao
@@ -43,8 +48,6 @@ public class AuthorityRuleController {
 
     private final Logger logger = LoggerFactory.getLogger(AuthorityRuleController.class);
 
-    @Autowired
-    private RuleRepository<AuthorityRuleEntity, Long> repository;
     @Autowired
     @Qualifier("authorityRuleNacosProvider")
     private DynamicRuleProvider<List<AuthorityRuleEntity>> ruleProvider;
@@ -67,9 +70,7 @@ public class AuthorityRuleController {
             return Result.ofFail(-1, "Invalid parameter: port");
         }
         try {
-            List<AuthorityRuleEntity> rules = ruleProvider.getRules(app);
-            rules = repository.saveAll(rules);
-            return Result.ofSuccess(rules);
+            return Result.ofSuccess(ruleProvider.getRules(app));
         } catch (Throwable throwable) {
             logger.error("Error when querying authority rules", throwable);
             return Result.ofFail(-1, throwable.getMessage());
@@ -99,7 +100,7 @@ public class AuthorityRuleController {
             return Result.ofFail(-1, "limitApp should be valid");
         }
         if (entity.getStrategy() != RuleConstant.AUTHORITY_WHITE
-            && entity.getStrategy() != RuleConstant.AUTHORITY_BLACK) {
+                && entity.getStrategy() != RuleConstant.AUTHORITY_BLACK) {
             return Result.ofFail(-1, "Unknown strategy (must be blacklist or whitelist)");
         }
         return null;
@@ -112,13 +113,18 @@ public class AuthorityRuleController {
         if (checkResult != null) {
             return checkResult;
         }
-        entity.setId(null);
         Date date = new Date();
         entity.setGmtCreate(date);
         entity.setGmtModified(date);
         try {
-            entity = repository.save(entity);
-            publishRules(entity.getApp());
+            List<AuthorityRuleEntity> rules = ruleProvider.getRules(entity.getApp());
+            Long id = 0L;
+            if (rules.size() != 0) {
+                id = rules.stream().max(Comparator.comparing(AuthorityRuleEntity::getId)).get().getId();
+            }
+            entity.setId(id + 1L);
+            rules.add(entity);
+            rulePublisher.publish(entity.getApp(), rules);
         } catch (Throwable throwable) {
             logger.error("Failed to add authority rule", throwable);
             return Result.ofThrowable(-1, throwable);
@@ -133,20 +139,22 @@ public class AuthorityRuleController {
         if (id == null || id <= 0) {
             return Result.ofFail(-1, "Invalid id");
         }
-        Result<AuthorityRuleEntity> checkResult = checkEntityInternal(entity);
-        if (checkResult != null) {
-            return checkResult;
-        }
-        entity.setId(id);
-        Date date = new Date();
-        entity.setGmtCreate(null);
-        entity.setGmtModified(date);
         try {
-            entity = repository.save(entity);
-            if (entity == null) {
-                return Result.ofFail(-1, "Failed to save authority rule");
+            List<AuthorityRuleEntity> rules = ruleProvider.getRules(entity.getApp());
+            AuthorityRuleEntity oldEntity = rules.stream().filter(item -> item.getId().equals(id)).limit(1).collect(toList()).get(0);
+            if (oldEntity == null) {
+                return Result.ofFail(-1, "id " + id + " does not exist");
             }
-            publishRules(entity.getApp());
+            BeanUtils.copyProperties(entity, oldEntity);
+
+            Result<AuthorityRuleEntity> checkResult = checkEntityInternal(entity);
+            if (checkResult != null) {
+                return checkResult;
+            }
+
+            oldEntity.setGmtModified(new Date());
+
+            rulePublisher.publish(entity.getApp(), rules);
         } catch (Throwable throwable) {
             logger.error("Failed to save authority rule", throwable);
             return Result.ofThrowable(-1, throwable);
@@ -156,25 +164,22 @@ public class AuthorityRuleController {
 
     @DeleteMapping("/rule/{id}")
     @AuthAction(PrivilegeType.DELETE_RULE)
-    public Result<Long> apiDeleteRule(@PathVariable("id") Long id) {
+    public Result<Long> apiDeleteRule(@PathVariable("id") Long id,
+                                      @RequestBody FlowRuleEntity entity) {
         if (id == null) {
             return Result.ofFail(-1, "id cannot be null");
         }
-        AuthorityRuleEntity oldEntity = repository.findById(id);
-        if (oldEntity == null) {
-            return Result.ofSuccess(null);
-        }
         try {
-            repository.delete(id);
-            publishRules(oldEntity.getApp());
+            List<AuthorityRuleEntity> rules = ruleProvider.getRules(entity.getApp());
+
+            IntStream.range(0, rules.size()).filter(i ->
+                    rules.get(i).getId().equals(id)).boxed().findFirst().map(i -> rules.remove((int) i));
+
+            rulePublisher.publish(entity.getApp(), rules);
         } catch (Exception e) {
             return Result.ofFail(-1, e.getMessage());
         }
         return Result.ofSuccess(id);
     }
 
-    private void publishRules(String app) throws Exception  {
-        List<AuthorityRuleEntity> rules = repository.findAllByApp(app);
-        rulePublisher.publish(app, rules);
-    }
 }

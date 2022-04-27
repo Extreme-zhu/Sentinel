@@ -19,7 +19,6 @@ import com.alibaba.csp.sentinel.dashboard.auth.AuthAction;
 import com.alibaba.csp.sentinel.dashboard.auth.AuthService.PrivilegeType;
 import com.alibaba.csp.sentinel.dashboard.datasource.entity.rule.DegradeRuleEntity;
 import com.alibaba.csp.sentinel.dashboard.domain.Result;
-import com.alibaba.csp.sentinel.dashboard.repository.rule.RuleRepository;
 import com.alibaba.csp.sentinel.dashboard.rule.DynamicRuleProvider;
 import com.alibaba.csp.sentinel.dashboard.rule.DynamicRulePublisher;
 import com.alibaba.csp.sentinel.slots.block.RuleConstant;
@@ -31,8 +30,12 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.Comparator;
 import java.util.Date;
 import java.util.List;
+import java.util.stream.IntStream;
+
+import static java.util.stream.Collectors.toList;
 
 /**
  * Controller regarding APIs of degrade rules. Refactored since 1.8.0.
@@ -46,8 +49,6 @@ public class DegradeController {
 
     private final Logger logger = LoggerFactory.getLogger(DegradeController.class);
 
-    @Autowired
-    private RuleRepository<DegradeRuleEntity, Long> repository;
     @Autowired
     @Qualifier("degradeRuleNacosProvider")
     private DynamicRuleProvider<List<DegradeRuleEntity>> ruleProvider;
@@ -68,9 +69,7 @@ public class DegradeController {
             return Result.ofFail(-1, "port can't be null");
         }
         try {
-            List<DegradeRuleEntity> rules = ruleProvider.getRules(app);
-            rules = repository.saveAll(rules);
-            return Result.ofSuccess(rules);
+            return Result.ofSuccess(ruleProvider.getRules(app));
         } catch (Throwable throwable) {
             logger.error("queryApps error:", throwable);
             return Result.ofThrowable(-1, throwable);
@@ -88,11 +87,17 @@ public class DegradeController {
         entity.setGmtCreate(date);
         entity.setGmtModified(date);
         try {
-            entity = repository.save(entity);
-            publishRules(entity.getApp());
-        } catch (Throwable t) {
-            logger.error("Failed to add new degrade rule, app={}, ip={}", entity.getApp(), entity.getIp(), t);
-            return Result.ofThrowable(-1, t);
+            List<DegradeRuleEntity> rules = ruleProvider.getRules(entity.getApp());
+            Long id = 0L;
+            if (rules.size() != 0) {
+                id = rules.stream().max(Comparator.comparing(DegradeRuleEntity::getId)).get().getId();
+            }
+            entity.setId(id + 1L);
+            rules.add(entity);
+            rulePublisher.publish(entity.getApp(), rules);
+        } catch (Throwable throwable) {
+            logger.error("add error:", throwable);
+            return Result.ofThrowable(-1, throwable);
         }
         return Result.ofSuccess(entity);
     }
@@ -104,56 +109,52 @@ public class DegradeController {
         if (id == null || id <= 0) {
             return Result.ofFail(-1, "id can't be null or negative");
         }
-        DegradeRuleEntity oldEntity = repository.findById(id);
-        if (oldEntity == null) {
-            return Result.ofFail(-1, "Degrade rule does not exist, id=" + id);
-        }
-        entity.setApp(oldEntity.getApp());
-        entity.setIp(oldEntity.getIp());
-        entity.setPort(oldEntity.getPort());
-        entity.setId(oldEntity.getId());
-        Result<DegradeRuleEntity> checkResult = checkEntityInternal(entity);
-        if (checkResult != null) {
-            return checkResult;
-        }
-
-        entity.setGmtCreate(oldEntity.getGmtCreate());
-        entity.setGmtModified(new Date());
+        DegradeRuleEntity oldEntity;
         try {
-            entity = repository.save(entity);
-            publishRules(entity.getApp());
+            List<DegradeRuleEntity> rules = ruleProvider.getRules(entity.getApp());
+            oldEntity = rules.stream().filter(item -> item.getId().equals(id)).limit(1).collect(toList()).get(0);
+            if (oldEntity == null) {
+                return Result.ofFail(-1, "Degrade rule does not exist, id=" + id);
+            }
+            entity.setApp(oldEntity.getApp());
+            entity.setIp(oldEntity.getIp());
+            entity.setPort(oldEntity.getPort());
+            entity.setId(oldEntity.getId());
+            Result<DegradeRuleEntity> checkResult = checkEntityInternal(entity);
+            if (checkResult != null) {
+                return checkResult;
+            }
+
+            entity.setGmtCreate(oldEntity.getGmtCreate());
+            entity.setGmtModified(new Date());
+            rulePublisher.publish(oldEntity.getApp(), rules);
         } catch (Throwable t) {
             logger.error("Failed to save degrade rule, id={}, rule={}", id, entity, t);
             return Result.ofThrowable(-1, t);
         }
+
         return Result.ofSuccess(entity);
     }
 
     @DeleteMapping("/rule/{id}")
     @AuthAction(PrivilegeType.DELETE_RULE)
-    public Result<Long> delete(@PathVariable("id") Long id) {
+    public Result<Long> delete(@PathVariable("id") Long id, @RequestParam("app") String app) {
         if (id == null) {
             return Result.ofFail(-1, "id can't be null");
         }
-
-        DegradeRuleEntity oldEntity = repository.findById(id);
-        if (oldEntity == null) {
-            return Result.ofSuccess(null);
-        }
-
         try {
-            repository.delete(id);
-            publishRules(oldEntity.getApp());
+            List<DegradeRuleEntity> rules = ruleProvider.getRules(app.trim());
+
+            IntStream.range(0, rules.size()).filter(i ->
+                    rules.get(i).getId().equals(id)).boxed().findFirst().map(i -> rules.remove((int) i));
+
+            rulePublisher.publish(app.trim(), rules);
         } catch (Throwable throwable) {
-            logger.error("Failed to delete degrade rule, id={}", id, throwable);
+            logger.error("delete error:", throwable);
             return Result.ofThrowable(-1, throwable);
         }
-        return Result.ofSuccess(id);
-    }
 
-    private void publishRules(String app) throws Exception {
-        List<DegradeRuleEntity> rules = repository.findAllByApp(app);
-        rulePublisher.publish(app, rules);
+        return Result.ofSuccess(id);
     }
 
     private <R> Result<R> checkEntityInternal(DegradeRuleEntity entity) {
