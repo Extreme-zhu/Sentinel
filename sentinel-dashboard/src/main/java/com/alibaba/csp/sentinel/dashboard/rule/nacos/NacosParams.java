@@ -1,5 +1,6 @@
 package com.alibaba.csp.sentinel.dashboard.rule.nacos;
 
+import com.alibaba.nacos.api.config.ConfigType;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
@@ -13,6 +14,7 @@ public class NacosParams {
     private String serverAddr;
     private String groupId;
     private String namespace;
+    private String configType = ConfigType.JSON.getType();
 
     private String flowDataPostfix;
     private String degradeDataPostfix;
@@ -52,6 +54,14 @@ public class NacosParams {
 
     public void setNamespace(String namespace) {
         this.namespace = namespace;
+    }
+
+    public String getConfigType() {
+        return configType;
+    }
+
+    public void setConfigType(String configType) {
+        this.configType = configType;
     }
 
     public String getFlowDataPostfix() {

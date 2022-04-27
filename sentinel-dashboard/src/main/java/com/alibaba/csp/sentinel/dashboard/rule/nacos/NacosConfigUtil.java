@@ -76,11 +76,15 @@ public final class NacosConfigUtil {
         configService.addListener(dataId, nacosParams.getGroupId(), listener);
 
         try {
+            String content = JSONUtils.toPrettyJSONString(rules);
+            logger.debug("publishConfig to nacos, content:{}", content);
             // 持久化
             configService.publishConfig(
                     dataId,
                     nacosParams.getGroupId(),
-                    JSONUtils.toJSONString(rules)
+                    content,
+                    // 指定持久化字符类型
+                    nacosParams.getConfigType()
             );
 
             Integer checkCount = nacosParams.getCheckCount();

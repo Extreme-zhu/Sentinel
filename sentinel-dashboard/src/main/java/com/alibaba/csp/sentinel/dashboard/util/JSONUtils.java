@@ -17,6 +17,14 @@ public class JSONUtils {
         }
     }
 
+    public static <T> String toPrettyJSONString(Object object) {
+        try {
+            return new ObjectMapper().writerWithDefaultPrettyPrinter().writeValueAsString(object);
+        } catch (JsonProcessingException e) {
+            throw new IllegalArgumentException(e);
+        }
+    }
+
     public static JavaType getCollectionType(Class<?> collectionClass, Class<?>... elementClasses) {
         return new ObjectMapper()
                 .getTypeFactory()
